@@ -26,7 +26,7 @@ if (program.args.length !== 1) {
   process.exit(1)
 }
 
-const split = require('split')
+const Mbox = require('node-mbox')
 const { MailParser } = require('mailparser')
 const uuidv4 = require('uuid/v4')
 
@@ -61,74 +61,46 @@ if (!fs.existsSync(outDir)) {
   fs.mkdirSync(outDir)
 }
 
-let messageParser
-let emlWriteStream
-let emptyLine = true
-let messageId
-let emlTmpFile
+const mboxSplit = new Mbox({
+  stream: true
+})
 
-const endMessage = () => {
-  if (messageParser) {
-    messageParser.end()
-  }
-  if (emlWriteStream) {
-    if (!messageId) {
-      console.error('no message id', messageId)
-    }
-    let rename = [
-      emlTmpFile,
-      `${messageId}.eml`
-    ]
+fsStream
+  .pipe(mboxSplit)
+  .on('message', stream => {
+    const messageParser = new MailParser()
+    let messageId
+    messageParser.on('headers', data => {
+      messageId = (
+        data.get('message-id') ||
+        crypto.createHash('md5')
+          .update(JSON.stringify([...data]))
+          .digest('hex')
+      ).replace(/\//g, '-').replace(/^<|>$/g, '')
+    })
+
+    const emlTmpFile = `${uuidv4()}.tmp.eml`
+    const emlWriteStream = fs.createWriteStream(path.join(outDir, emlTmpFile))
+    emlWriteStream.on('error', fsErrorHandler)
     emlWriteStream.on('close', () => {
       process.stdout.write(',')
+      if (!messageId) {
+        console.error('no message id', messageId)
+      }
       fs.rename(
-        path.join(outDir, rename[0]),
-        path.join(outDir, rename[1]),
+        path.join(outDir, emlTmpFile),
+        path.join(outDir, `${messageId}.eml`),
         fsErrorHandler
       )
     })
-    emlWriteStream.end()
-  }
-}
-
-fsStream
-  .pipe(split())
-  .on('data', line => {
-    const newMessage = line.startsWith('From ') && emptyLine
-    if (newMessage) {
-      endMessage()
-
-      messageParser = new MailParser()
-      messageParser.on('headers', data => {
-        messageId = (
-          data.get('message-id') ||
-          crypto.createHash('md5')
-            .update(JSON.stringify([...data]))
-            .digest('hex')
-        ).replace(/\//g, '-').replace(/^<|>$/g, '')
-      })
-
-      emlTmpFile = `${uuidv4()}.tmp.eml`
-      emlWriteStream = fs.createWriteStream(path.join(outDir, emlTmpFile))
-      emlWriteStream.on('error', fsErrorHandler)
-      messageId = undefined
-    }
-
-    const chunk = newMessage
-      ? line
-      : `\n${line}`
-
-    messageParser.write(chunk, 'utf8')
-    emlWriteStream && emlWriteStream.write(chunk,  'utf8')
-
-    if (!line.length) {
-      emptyLine = true
-    } else {
-      emptyLine = false
-    }
-  })
-  .on('end', () => {
-    endMessage()
+    stream.on('data', chunk => {
+      messageParser.write(chunk, 'utf8')
+      emlWriteStream.write(chunk,  'utf8')
+    })
+    stream.on('end', () => {
+      messageParser.end()
+      emlWriteStream.end()
+    })
   })
 
 process.on('exit', () => {
