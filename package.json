@@ -6,6 +6,7 @@
   "dependencies": {
     "commander": "^2.11.0",
     "d3-queue": "^3.0.7",
+    "digest-stream": "^2.0.0",
     "lodash.throttle": "^4.1.1",
     "mailparser": "^2.1.0",
     "mkdirp": "^0.5.1",

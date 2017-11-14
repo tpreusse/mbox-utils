@@ -7,7 +7,6 @@
 
 const fs = require('fs')
 const path = require('path')
-const crypto = require('crypto')
 
 const program = require('commander')
 
@@ -16,7 +15,6 @@ const { version } = require('./package.json')
 program
   .version(version)
   .usage('[options] <file>')
-  .option('-e, --eml', 'dump eml files')
   .option('-s, --slave', 'silent mode, only report to master')
   .option('-o, --out [value]', 'out dir')
   .parse(process.argv)
@@ -27,12 +25,8 @@ if (program.args.length !== 1) {
 }
 
 const Mbox = require('node-mbox')
-const { MailParser } = require('mailparser')
+const digestStream = require('digest-stream')
 const uuidv4 = require('uuid/v4')
-
-const {
-  eml: dumpEml = false,
-} = program
 
 const outDir = program.out || __dirname
 
@@ -47,7 +41,7 @@ const mbox = program.args[0]
 
 !program.slave && console.log(
 `Processed Legend:
-  , eml dump
+  , file written
 
 Mbox: ${mbox}
 `)
@@ -68,39 +62,26 @@ const mboxSplit = new Mbox({
 fsStream
   .pipe(mboxSplit)
   .on('message', stream => {
-    const messageParser = new MailParser()
-    let messageId
-    messageParser.on('headers', data => {
-      messageId = (
-        data.get('message-id') ||
-        crypto.createHash('md5')
-          .update(JSON.stringify([...data]))
-          .digest('hex')
-      ).replace(/\//g, '-').replace(/^<|>$/g, '')
-    })
-
+    let sha
     const emlTmpFile = `${uuidv4()}.tmp.eml`
     const emlWriteStream = fs.createWriteStream(path.join(outDir, emlTmpFile))
     emlWriteStream.on('error', fsErrorHandler)
     emlWriteStream.on('close', () => {
       process.stdout.write(',')
-      if (!messageId) {
-        console.error('no message id', messageId)
+      if (!sha) {
+        console.error('no sha', sha)
       }
       fs.rename(
         path.join(outDir, emlTmpFile),
-        path.join(outDir, `${messageId}.eml`),
+        path.join(outDir, `${sha}.eml`),
         fsErrorHandler
       )
     })
-    stream.on('data', chunk => {
-      messageParser.write(chunk, 'utf8')
-      emlWriteStream.write(chunk,  'utf8')
-    })
-    stream.on('end', () => {
-      messageParser.end()
-      emlWriteStream.end()
-    })
+    stream
+      .pipe(digestStream('sha256', 'hex', digest => {
+        sha = digest
+      }))
+      .pipe(emlWriteStream)
   })
 
 process.on('exit', () => {
